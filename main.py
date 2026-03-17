@@ -1,63 +1,44 @@
-from bs4 import BeautifulSoup
-import requests
-import smtplib
+import sys
 import os
-from dotenv import load_dotenv
 
-load_dotenv()
+# Allow running this script directly
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-url = "https://www.amazon.com/dp/B075CYMYK6"
+import time
+import schedule
+import logging
 
-headers = {
-    "User-Agent": "Mozilla/5.0",
-    "Accept-Language": "en-US,en;q=0.9"
-}
+from cli.commands import run_cli
+from services.tracker import run_tracker_job
 
-response = requests.get(url, headers=headers, timeout=10)
-response.raise_for_status()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 
-soup = BeautifulSoup(response.text, "html.parser")
+def start_scheduler():
+    """
+    Runs the tracking job every 2 hours continuously.
+    """
+    logging.info("Starting background scheduler... (Runs every 2 hours)")
+    
+    # Run once immediately on startup
+    run_tracker_job()
+    
+    # Schedule every 2 hours
+    schedule.every(2).hours.do(run_tracker_job)
+    
+    try:
+        while True:
+            schedule.run_pending()
+            time.sleep(60) # Wait 1 minute between checks
+    except KeyboardInterrupt:
+        logging.info("Scheduler stopped by user.")
 
-# -------- Get Price --------
-price_tag = soup.select_one(".a-price .a-offscreen")
-
-if not price_tag:
-    raise Exception("Price not found. Amazon likely blocked the request.")
-
-price_text = price_tag.get_text().strip()
-price_as_float = float(price_text.replace("INR", "").replace(",", ""))
-
-print("Price:", price_as_float)
-
-# -------- Get Title --------
-title_tag = soup.find(id="productTitle")
-
-if not title_tag:
-    raise Exception("Title not found")
-
-title = title_tag.get_text().strip()
-print("Title:", title)
-
-# -------- Price Alert --------
-BUY_PRICE = 100000
-
-if price_as_float < BUY_PRICE:
-
-    message = f"""Subject: Amazon Price Alert!{title} Price dropped to {price_text} {url} """
-    print(message)
-
-    with smtplib.SMTP(os.environ["SMTP_ADDRESS"], 587) as connection:
-        connection.starttls()
-
-        connection.login(
-            os.environ["EMAIL_ADDRESS"],
-            os.environ["EMAIL_PASSWORD"]
-        )
-
-        connection.sendmail(
-            from_addr=os.environ["EMAIL_ADDRESS"],
-            to_addrs=os.environ["EMAIL_ADDRESS"],
-            msg=message.encode("utf-8")
-        )
-
-    print("Email sent.")
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        # If arguments are passed, route to CLI commands
+        if sys.argv[1] == "schedule":
+            start_scheduler()
+        else:
+            run_cli()
+    else:
+        # Default behavior: Print help if no args provided
+        run_cli()
