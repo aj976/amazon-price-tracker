@@ -2,8 +2,8 @@ import argparse
 import sys
 import logging
 from utils.parser import is_valid_amazon_url
-from services.tracker import track_product, run_tracker_job
-from database import db
+from database.repository import Repository
+from services.tracking_service import TrackingService
 
 def setup_argparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Amazon Price Tracker (APT)")
@@ -26,7 +26,7 @@ def setup_argparser() -> argparse.ArgumentParser:
     
     return parser
 
-def handle_add(args):
+def handle_add(args, tracking_service: TrackingService):
     """Handles the 'add' CLI command."""
     url = args.url
     target_price = args.price
@@ -36,59 +36,47 @@ def handle_add(args):
         sys.exit(1)
         
     print(f"Adding product to tracker... Target price: ₹{target_price}")
-    result = track_product(url, target_price)
+    result = tracking_service.track_product(url, target_price)
     
     if result.get("success"):
         print(f"✅ Success: {result['message']}")
     else:
         print(f"❌ Failed: {result['message']}")
 
-def handle_list(args):
+def handle_list(args, repo: Repository):
     """Handles the 'list' CLI command."""
     print("\n--- Tracked Products ---")
-    items = db.get_all_tracked_products()
-    
-    if not items:
-        print("No products currently tracked.")
-        return
-        
-    for item in items:
-        product = item.get("products")
-        if not product: continue
-        
-        asin = product.get("asin")
-        title = product.get("title", "")[:40]
-        target = item.get("target_price")
-        notified = item.get("last_notified_price", "N/A")
-        
-        print(f"• ASIN: {asin} | Target: ₹{target} | (Last Notified: ₹{notified})")
-        print(f"  Title: {title}...")
-
-def handle_track_now(args):
-    """Handles the 'track-now' CLI command."""
-    print("Initiating manual tracking job...")
-    run_tracker_job()
-    print("Tracking job finished. Check console logs for details.")
-
-def handle_remove(args):
-    """Handles the 'remove' CLI command."""
-    asin = args.asin
-    db_client = db.get_db()
-    if not db_client:
-        print("Database connection error.")
-        return
-        
     try:
-        # Get product ID first
-        product = db.get_product_by_asin(asin)
-        if not product:
-            print(f"Product with ASIN '{asin}' not found.")
+        items = repo.get_all_tracked_products()
+        if not items:
+            print("No products currently tracked.")
             return
             
-        product_id = product["id"]
-        
-        # We can just delete the tracking row OR delete the whole product which cascades
-        result, count = db_client.table("products").delete().eq("id", product_id).execute()
+        for item in items:
+            product = item.get("products")
+            if not product: continue
+            
+            asin = product.get("asin")
+            title = product.get("title", "")[:40]
+            target = item.get("target_price")
+            notified = item.get("last_notified_price", "N/A")
+            
+            print(f"• ASIN: {asin} | Target: ₹{target} | (Last Notified: ₹{notified})")
+            print(f"  Title: {title}...")
+    except Exception as e:
+        print(f"❌ Failed to fetch list: {e}")
+
+def handle_track_now(args, tracking_service: TrackingService):
+    """Handles the 'track-now' CLI command."""
+    print("Initiating manual tracking job...")
+    tracking_service.run_tracking_iteration()
+    print("Tracking job finished. Check console logs for details.")
+
+def handle_remove(args, repo: Repository):
+    """Handles the 'remove' CLI command."""
+    asin = args.asin
+    try:
+        repo.delete_product(asin)
         print(f"✅ Removed product ASIN {asin} from tracking.")
     except Exception as e:
         print(f"❌ Failed to remove product: {e}")
@@ -98,13 +86,16 @@ def run_cli():
     parser = setup_argparser()
     args = parser.parse_args()
     
+    repo = Repository()
+    tracking_service = TrackingService(repo)
+    
     if args.command == "add":
-        handle_add(args)
+        handle_add(args, tracking_service)
     elif args.command == "list":
-        handle_list(args)
+        handle_list(args, repo)
     elif args.command == "track-now":
-        handle_track_now(args)
+        handle_track_now(args, tracking_service)
     elif args.command == "remove":
-        handle_remove(args)
+        handle_remove(args, repo)
     else:
         parser.print_help()
